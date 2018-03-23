@@ -10,25 +10,20 @@
 package com.facebook.react.devsupport;
 
 import android.util.Log;
-import javax.annotation.Nullable;
-
+import com.facebook.common.logging.FLog;
+import com.facebook.infer.annotation.Assertions;
+import com.facebook.react.common.DebugServerException;
+import com.facebook.react.common.ReactConstants;
+import com.facebook.react.devsupport.interfaces.DevBundleDownloadListener;
 import java.io.File;
 import java.io.IOException;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-
-import com.facebook.common.logging.FLog;
-import com.facebook.infer.annotation.Assertions;
-import com.facebook.react.common.ReactConstants;
-import com.facebook.react.devsupport.interfaces.DevBundleDownloadListener;
-import com.facebook.react.common.DebugServerException;
-
-import org.json.JSONException;
-import org.json.JSONObject;
-
+import javax.annotation.Nullable;
 import okhttp3.Call;
 import okhttp3.Callback;
+import okhttp3.Headers;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
@@ -36,6 +31,8 @@ import okio.Buffer;
 import okio.BufferedSource;
 import okio.Okio;
 import okio.Sink;
+import org.json.JSONException;
+import org.json.JSONObject;
 
 public class BundleDownloader {
   private static final String TAG = "BundleDownloader";
@@ -44,6 +41,8 @@ public class BundleDownloader {
   private static final int FILES_CHANGED_COUNT_NOT_BUILT_BY_BUNDLER = -2;
 
   private final OkHttpClient mClient;
+
+  private final BundleDeltaClient mBundleDeltaClient = new BundleDeltaClient();
 
   private @Nullable Call mDownloadBundleFromURLCall;
 
@@ -102,13 +101,16 @@ public class BundleDownloader {
       final File outputFile,
       final String bundleURL,
       final @Nullable BundleInfo bundleInfo) {
-    final Request request = new Request.Builder()
-        .url(bundleURL)
-        // FIXME: there is a bug that makes MultipartStreamReader to never find the end of the
-        // multipart message. This temporarily disables the multipart mode to work around it, but
-        // it means there is no progress bar displayed in the React Native overlay anymore.
-        //.addHeader("Accept", "multipart/mixed")
-        .build();
+
+    final Request request =
+        new Request.Builder()
+            .url(mBundleDeltaClient.toDeltaUrl(bundleURL))
+            // FIXME: there is a bug that makes MultipartStreamReader to never find the end of the
+            // multipart message. This temporarily disables the multipart mode to work around it,
+            // but
+            // it means there is no progress bar displayed in the React Native overlay anymore.
+            // .addHeader("Accept", "multipart/mixed")
+            .build();
     mDownloadBundleFromURLCall = Assertions.assertNotNull(mClient.newCall(request));
     mDownloadBundleFromURLCall.enqueue(new Callback() {
       @Override
@@ -144,23 +146,24 @@ public class BundleDownloader {
         if (match.find()) {
           String boundary = match.group(1);
           MultipartStreamReader bodyReader = new MultipartStreamReader(response.body().source(), boundary);
-          boolean completed = bodyReader.readAllParts(new MultipartStreamReader.ChunkCallback() {
+          boolean completed = bodyReader.readAllParts(new MultipartStreamReader.ChunkListener() {
             @Override
-            public void execute(Map<String, String> headers, Buffer body, boolean finished) throws IOException {
+            public void onChunkComplete(Map<String, String> headers, Buffer body, boolean isLastChunk) throws IOException {
               // This will get executed for every chunk of the multipart response. The last chunk
-              // (finished = true) will be the JS bundle, the other ones will be progress events
+              // (isLastChunk = true) will be the JS bundle, the other ones will be progress events
               // encoded as JSON.
-              if (finished) {
+              if (isLastChunk) {
                 // The http status code for each separate chunk is in the X-Http-Status header.
                 int status = response.code();
                 if (headers.containsKey("X-Http-Status")) {
                   status = Integer.parseInt(headers.get("X-Http-Status"));
                 }
-                processBundleResult(url, status, okhttp3.Headers.of(headers), body, outputFile, bundleInfo, callback);
+                processBundleResult(url, status, Headers.of(headers), body, outputFile, bundleInfo, callback);
               } else {
                 if (!headers.containsKey("Content-Type") || !headers.get("Content-Type").equals("application/json")) {
                   return;
                 }
+
                 try {
                   JSONObject progress = new JSONObject(body.readUtf8());
                   String status = null;
@@ -181,6 +184,15 @@ public class BundleDownloader {
                 }
               }
             }
+            @Override
+            public void onChunkProgress(Map<String, String> headers, long loaded, long total) throws IOException {
+              if ("application/javascript".equals(headers.get("Content-Type"))) {
+                callback.onProgress(
+                  "Downloading JavaScript bundle",
+                  (int) (loaded / 1024),
+                  (int) (total / 1024));
+              }
+            }
           });
           if (!completed) {
             callback.onFailure(new DebugServerException(
@@ -195,21 +207,15 @@ public class BundleDownloader {
     });
   }
 
-  public void cancelDownloadBundleFromURL() {
-    if (mDownloadBundleFromURLCall != null) {
-      mDownloadBundleFromURLCall.cancel();
-      mDownloadBundleFromURLCall = null;
-    }
-  }
-
-  private static void processBundleResult(
+  private void processBundleResult(
       String url,
       int statusCode,
-      okhttp3.Headers headers,
+      Headers headers,
       BufferedSource body,
       File outputFile,
       BundleInfo bundleInfo,
-      DevBundleDownloadListener callback) throws IOException {
+      DevBundleDownloadListener callback)
+      throws IOException {
     // Check for server errors. If the server error has the expected form, fail with more info.
     if (statusCode != 200) {
       String bodyString = body.readUtf8();
@@ -232,9 +238,32 @@ public class BundleDownloader {
     }
 
     File tmpFile = new File(outputFile.getPath() + ".tmp");
+
+    boolean bundleUpdated;
+
+    if (BundleDeltaClient.isDeltaUrl(url)) {
+      // If the bundle URL has the delta extension, we need to use the delta patching logic.
+      bundleUpdated = mBundleDeltaClient.storeDeltaInFile(body, tmpFile);
+    } else {
+      mBundleDeltaClient.reset();
+      bundleUpdated = storePlainJSInFile(body, tmpFile);
+    }
+
+    if (bundleUpdated) {
+      // If we have received a new bundle from the server, move it to its final destination.
+      if (!tmpFile.renameTo(outputFile)) {
+        throw new IOException("Couldn't rename " + tmpFile + " to " + outputFile);
+      }
+    }
+
+    callback.onSuccess();
+  }
+
+  private static boolean storePlainJSInFile(BufferedSource body, File outputFile)
+      throws IOException {
     Sink output = null;
     try {
-      output = Okio.sink(tmpFile);
+      output = Okio.sink(outputFile);
       body.readAll(output);
     } finally {
       if (output != null) {
@@ -242,14 +271,10 @@ public class BundleDownloader {
       }
     }
 
-    if (tmpFile.renameTo(outputFile)) {
-      callback.onSuccess();
-    } else {
-      throw new IOException("Couldn't rename " + tmpFile + " to " + outputFile);
-    }
+    return true;
   }
 
-  private static void populateBundleInfo(String url, okhttp3.Headers headers, BundleInfo bundleInfo) {
+  private static void populateBundleInfo(String url, Headers headers, BundleInfo bundleInfo) {
     bundleInfo.mUrl = url;
 
     String filesChangedCountStr = headers.get("X-Metro-Files-Changed-Count");

@@ -5,6 +5,8 @@
  * This source code is licensed under the BSD-style license found in the
  * LICENSE file in the root directory of this source tree. An additional grant
  * of patent rights can be found in the PATENTS file in the same directory.
+ *
+ * @emails oncall+react_native
  */
 'use strict';
 
@@ -92,11 +94,11 @@ describe('Animated tests', () => {
           opacity: anim,
         },
       };
-      c.componentWillMount();
+      c.UNSAFE_componentWillMount();
 
       expect(anim.__detach).not.toBeCalled();
       c._component = {};
-      c.componentWillReceiveProps({
+      c.UNSAFE_componentWillReceiveProps({
         style: {
           opacity: anim,
         },
@@ -118,7 +120,7 @@ describe('Animated tests', () => {
           opacity: anim,
         },
       };
-      c.componentWillMount();
+      c.UNSAFE_componentWillMount();
 
       Animated.timing(anim, {toValue: 10, duration: 1000}).start(callback);
       c._component = {};
@@ -369,7 +371,7 @@ describe('Animated tests', () => {
       loop.start(cb);
 
       expect(animation.start).not.toBeCalled();
-      expect(cb).toBeCalledWith({ finished: true });
+      expect(cb).toBeCalledWith({finished: true});
     });
 
     it('supports interrupting an indefinite loop', () => {

@@ -9,17 +9,18 @@
 
 package com.facebook.react.views.scroll;
 
+import android.annotation.TargetApi;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Rect;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
+import android.support.v4.view.ViewCompat;
 import android.util.Log;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.OverScroller;
-import android.widget.ScrollView;
 import com.facebook.infer.annotation.Assertions;
 import com.facebook.react.bridge.ReactContext;
 import com.facebook.react.common.ReactConstants;
@@ -30,6 +31,7 @@ import com.facebook.react.uimanager.events.NativeGestureUtil;
 import com.facebook.react.views.view.ReactViewBackgroundManager;
 import java.lang.reflect.Field;
 import javax.annotation.Nullable;
+import android.support.v4.widget.NestedScrollView;
 
 /**
  * A simple subclass of ScrollView that doesn't dispatch measure and layout to its children and has
@@ -38,13 +40,14 @@ import javax.annotation.Nullable;
  * <p>ReactScrollView only supports vertical scrolling. For horizontal scrolling,
  * use {@link ReactHorizontalScrollView}.
  */
-public class ReactScrollView extends ScrollView implements ReactClippingViewGroup, ViewGroup.OnHierarchyChangeListener, View.OnLayoutChangeListener {
+@TargetApi(11)
+public class ReactScrollView extends NestedScrollView implements ReactClippingViewGroup, ViewGroup.OnHierarchyChangeListener, View.OnLayoutChangeListener {
 
-  private static Field sScrollerField;
+  private static @Nullable Field sScrollerField;
   private static boolean sTriedToGetScrollerField = false;
 
   private final OnScrollDispatchHelper mOnScrollDispatchHelper = new OnScrollDispatchHelper();
-  private final OverScroller mScroller;
+  private final @Nullable OverScroller mScroller;
   private final VelocityHelper mVelocityHelper = new VelocityHelper();
 
   private @Nullable Rect mClippingRect;
@@ -70,10 +73,19 @@ public class ReactScrollView extends ScrollView implements ReactClippingViewGrou
     mFpsListener = fpsListener;
     mReactBackgroundManager = new ReactViewBackgroundManager(this);
 
+    mScroller = getOverScrollerFromParent();
+    setOnHierarchyChangeListener(this);
+    setScrollBarStyle(SCROLLBARS_OUTSIDE_OVERLAY);
+  }
+
+  @Nullable
+  private OverScroller getOverScrollerFromParent() {
+    OverScroller scroller;
+
     if (!sTriedToGetScrollerField) {
       sTriedToGetScrollerField = true;
       try {
-        sScrollerField = ScrollView.class.getDeclaredField("mScroller");
+        sScrollerField = NestedScrollView.class.getDeclaredField("mScroller");
         sScrollerField.setAccessible(true);
       } catch (NoSuchFieldException e) {
         Log.w(
@@ -85,32 +97,31 @@ public class ReactScrollView extends ScrollView implements ReactClippingViewGrou
 
     if (sScrollerField != null) {
       try {
-        Object scroller = sScrollerField.get(this);
-        if (scroller instanceof OverScroller) {
-          mScroller = (OverScroller) scroller;
+        Object scrollerValue = sScrollerField.get(this);
+        if (scrollerValue instanceof OverScroller) {
+          scroller = (OverScroller) scrollerValue;
         } else {
           Log.w(
             ReactConstants.TAG,
             "Failed to cast mScroller field in ScrollView (probably due to OEM changes to AOSP)! " +
               "This app will exhibit the bounce-back scrolling bug :(");
-          mScroller = null;
+          scroller = null;
         }
       } catch (IllegalAccessException e) {
         throw new RuntimeException("Failed to get mScroller from ScrollView!", e);
       }
     } else {
-      mScroller = null;
+      scroller = null;
     }
 
-    setOnHierarchyChangeListener(this);
-    setScrollBarStyle(SCROLLBARS_OUTSIDE_OVERLAY);
+    return scroller;
   }
 
   public void setSendMomentumEvents(boolean sendMomentumEvents) {
     mSendMomentumEvents = sendMomentumEvents;
   }
 
-  public void setScrollPerfTag(String scrollPerfTag) {
+  public void setScrollPerfTag(@Nullable String scrollPerfTag) {
     mScrollPerfTag = scrollPerfTag;
   }
 
@@ -145,13 +156,14 @@ public class ReactScrollView extends ScrollView implements ReactClippingViewGrou
     }
   }
 
-  @Override
-  protected void onAttachedToWindow() {
-    super.onAttachedToWindow();
-    if (mRemoveClippedSubviews) {
-      updateClippingRect();
-    }
-  }
+// method conflicts with NestedScrollView Implementation
+//  @Override
+//  protected void onAttachedToWindow() {
+//    super.onAttachedToWindow();
+//    if (mRemoveClippedSubviews) {
+//      updateClippingRect();
+//    }
+//  }
 
   @Override
   protected void onScrollChanged(int x, int y, int oldX, int oldY) {
@@ -269,7 +281,7 @@ public class ReactScrollView extends ScrollView implements ReactClippingViewGrou
         0,
         scrollWindowHeight / 2);
 
-      postInvalidateOnAnimation();
+      ViewCompat.postInvalidateOnAnimation(this);
 
       // END FB SCROLLVIEW CHANGE
     } else {
@@ -279,7 +291,7 @@ public class ReactScrollView extends ScrollView implements ReactClippingViewGrou
     if (mSendMomentumEvents || isScrollPerfLoggingEnabled()) {
       mFlinging = true;
       enableFpsListener();
-      ReactScrollViewHelper.emitScrollMomentumBeginEvent(this);
+      ReactScrollViewHelper.emitScrollMomentumBeginEvent(this, 0, velocityY);
       Runnable r = new Runnable() {
         @Override
         public void run() {
@@ -289,11 +301,14 @@ public class ReactScrollView extends ScrollView implements ReactClippingViewGrou
             ReactScrollViewHelper.emitScrollMomentumEndEvent(ReactScrollView.this);
           } else {
             mDoneFlinging = true;
-            ReactScrollView.this.postOnAnimationDelayed(this, ReactScrollViewHelper.MOMENTUM_DELAY);
+            ViewCompat.postOnAnimationDelayed(
+                ReactScrollView.this,
+                this,
+                ReactScrollViewHelper.MOMENTUM_DELAY);
           }
         }
       };
-      postOnAnimationDelayed(r, ReactScrollViewHelper.MOMENTUM_DELAY);
+      ViewCompat.postOnAnimationDelayed(this, r, ReactScrollViewHelper.MOMENTUM_DELAY);
     }
   }
 

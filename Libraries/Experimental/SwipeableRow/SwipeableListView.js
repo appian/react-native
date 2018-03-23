@@ -105,7 +105,7 @@ class SwipeableListView extends React.Component<Props, State> {
     };
   }
 
-  componentWillReceiveProps(nextProps: Props): void {
+  UNSAFE_componentWillReceiveProps(nextProps: Props): void {
     if (this.state.dataSource.getDataSource() !== nextProps.dataSource.getDataSource()) {
       this.setState({
         dataSource: nextProps.dataSource,
@@ -115,15 +115,9 @@ class SwipeableListView extends React.Component<Props, State> {
 
   render(): React.Node {
     return (
-      /* $FlowFixMe(>=0.53.0 site=react_native_fb,react_native_oss) This
-       * comment suppresses an error when upgrading Flow's support for React.
-       * To see the error delete this comment and run Flow. */
       <ListView
         {...this.props}
         ref={(ref) => {
-          /* $FlowFixMe(>=0.53.0 site=react_native_fb,react_native_oss) This
-           * comment suppresses an error when upgrading Flow's support for
-           * React. To see the error delete this comment and run Flow. */
           this._listViewRef = ref;
         }}
         dataSource={this.state.dataSource.getDataSource()}
