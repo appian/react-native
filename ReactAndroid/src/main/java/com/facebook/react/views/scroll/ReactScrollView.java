@@ -21,7 +21,6 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.OverScroller;
-import android.widget.ScrollView;
 import com.facebook.infer.annotation.Assertions;
 import com.facebook.react.bridge.ReactContext;
 import com.facebook.react.common.ReactConstants;
@@ -32,6 +31,7 @@ import com.facebook.react.uimanager.events.NativeGestureUtil;
 import com.facebook.react.views.view.ReactViewBackgroundManager;
 import java.lang.reflect.Field;
 import javax.annotation.Nullable;
+import android.support.v4.widget.NestedScrollView;
 
 /**
  * A simple subclass of ScrollView that doesn't dispatch measure and layout to its children and has
@@ -41,7 +41,7 @@ import javax.annotation.Nullable;
  * use {@link ReactHorizontalScrollView}.
  */
 @TargetApi(11)
-public class ReactScrollView extends ScrollView implements ReactClippingViewGroup, ViewGroup.OnHierarchyChangeListener, View.OnLayoutChangeListener {
+public class ReactScrollView extends NestedScrollView implements ReactClippingViewGroup, ViewGroup.OnHierarchyChangeListener, View.OnLayoutChangeListener {
 
   private static @Nullable Field sScrollerField;
   private static boolean sTriedToGetScrollerField = false;
@@ -85,7 +85,7 @@ public class ReactScrollView extends ScrollView implements ReactClippingViewGrou
     if (!sTriedToGetScrollerField) {
       sTriedToGetScrollerField = true;
       try {
-        sScrollerField = ScrollView.class.getDeclaredField("mScroller");
+        sScrollerField = NestedScrollView.class.getDeclaredField("mScroller");
         sScrollerField.setAccessible(true);
       } catch (NoSuchFieldException e) {
         Log.w(
@@ -156,13 +156,14 @@ public class ReactScrollView extends ScrollView implements ReactClippingViewGrou
     }
   }
 
-  @Override
-  protected void onAttachedToWindow() {
-    super.onAttachedToWindow();
-    if (mRemoveClippedSubviews) {
-      updateClippingRect();
-    }
-  }
+// method conflicts with NestedScrollView Implementation
+//  @Override
+//  protected void onAttachedToWindow() {
+//    super.onAttachedToWindow();
+//    if (mRemoveClippedSubviews) {
+//      updateClippingRect();
+//    }
+//  }
 
   @Override
   protected void onScrollChanged(int x, int y, int oldX, int oldY) {
